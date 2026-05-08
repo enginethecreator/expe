@@ -34,6 +34,7 @@ YouTube format availability context (2025+):
 import os
 import re
 import asyncio
+import shutil
 import json
 import urllib.request
 from pathlib import Path
@@ -52,7 +53,7 @@ app = FastAPI(title="yt-dlp server", version="2.1.0")
 DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", "./downloads"))
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 COOKIES_FILE = Path(os.environ.get("COOKIES_FILE", "./cookies.txt"))
-
+print("FFMPEG PATH:", shutil.which("ffmpeg"))
 executor = ThreadPoolExecutor(max_workers=4)
 
 
