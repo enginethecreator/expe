@@ -1,0 +1,7 @@
+# Railway build config
+# python3 is included automatically when Railway detects requirements.txt
+# ffmpeg  — required for merging video+audio streams and mp3 extraction
+# nodejs  — required by bgutil-ytdlp-pot-provider script mode to generate PO tokens
+
+[phases.setup]
+nixPkgs = ['ffmpeg', 'nodejs']
