@@ -76,7 +76,7 @@ BASE_OPTS = {
     # Required since yt-dlp 2025.11.12: a JS runtime to solve YouTube's n-challenge.
     # node is available in the Railway environment via nixpacks.toml (nodejs_22).
     # Empty dict means "find node in PATH" — no hardcoded path needed.
-    "js_runtimes": {"node": {}},
+    "js_runtimes": {"deno": {}},
 }
 
 
