@@ -291,6 +291,7 @@ def _fetch_info(url: str) -> dict:
 
 
 def _fetch_transcript(url: str, lang: str, use_cookies: bool = False) -> dict:
+    # 1. Prepare options
     opts = {
         **BASE_OPTS,
         "skip_download": True,
@@ -303,81 +304,86 @@ def _fetch_transcript(url: str, lang: str, use_cookies: bool = False) -> dict:
     if use_cookies and COOKIES_FILE.exists():
         opts["cookiefile"] = str(COOKIES_FILE)
 
+    try:
+        # 2. Extract Info
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            raw = ydl.extract_info(url, download=False)
+            raw = ydl.sanitize_info(raw)
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        raw = ydl.extract_info(url, download=False)
-        raw = ydl.sanitize_info(raw)
+            subtitles = raw.get("subtitles") or {}
+            auto_captions = raw.get("automatic_captions") or {}
 
-        subtitles = raw.get("subtitles") or {}
-        auto_captions = raw.get("automatic_captions") or {}
+            source = None
+            source_type = None
 
-        source = None
-        source_type = None
+            # 3. Find language source
+            if lang in subtitles:
+                source = subtitles[lang]
+                source_type = "manual"
+            elif lang in auto_captions:
+                source = auto_captions[lang]
+                source_type = "auto"
+            else:
+                # Fuzzy matching for locale codes (e.g., 'en' matches 'en-US')
+                for key in list(subtitles.keys()) + list(auto_captions.keys()):
+                    if key.startswith(lang):
+                        source = subtitles.get(key) or auto_captions.get(key)
+                        source_type = "manual" if key in subtitles else "auto"
+                        lang = key
+                        break
 
-        if lang in subtitles:
-            source = subtitles[lang]
-            source_type = "manual"
-        elif lang in auto_captions:
-            source = auto_captions[lang]
-            source_type = "auto"
-        else:
-            for key in list(subtitles.keys()) + list(auto_captions.keys()):
-                if key.startswith(lang):
-                    source = subtitles.get(key) or auto_captions.get(key)
-                    source_type = "manual" if key in subtitles else "auto"
-                    lang = key
-                    break
+            if not source:
+                available = list(subtitles.keys()) + list(auto_captions.keys())
+                raise ValueError(
+                    f"No transcript for lang '{lang}'. "
+                    f"Available: {available or 'none'}"
+                )
 
-        if not source:
-            available = list(subtitles.keys()) + list(auto_captions.keys())
-            raise ValueError(
-                f"No transcript for lang '{lang}'. "
-                f"Available: {available or 'none'}"
-            )
+            # 4. Fetch the JSON3 content
+            json3_entry = next((s for s in source if s.get("ext") == "json3"), None)
 
-        json3_entry = next(
-            (s for s in source if s.get("ext") == "json3"), None
-        )
+            if not json3_entry or not json3_entry.get("url"):
+                raise ValueError("Transcript URL not found in yt-dlp response")
 
-        if not json3_entry or not json3_entry.get("url"):
-            raise ValueError("Transcript URL not found in yt-dlp response")
+            with urllib.request.urlopen(json3_entry["url"], timeout=10) as resp:
+                raw_json = json.loads(resp.read().decode("utf-8"))
 
-        with urllib.request.urlopen(json3_entry["url"], timeout=10) as resp:
-            raw_json = json.loads(resp.read().decode("utf-8"))
+            # 5. Parse segments
+            segments = []
+            for event in raw_json.get("events", []):
+                if "segs" not in event:
+                    continue
+                start_ms = event.get("tStartMs", 0)
+                duration_ms = event.get("dDurationMs", 0)
+                text = "".join(seg.get("utf8", "") for seg in event["segs"]).strip()
+                if text and text != "\n":
+                    segments.append({
+                        "start": round(start_ms / 1000, 2),
+                        "duration": round(duration_ms / 1000, 2),
+                        "text": text,
+                    })
 
-        segments = []
-        for event in raw_json.get("events", []):
-            if "segs" not in event:
-                continue
-            start_ms = event.get("tStartMs", 0)
-            duration_ms = event.get("dDurationMs", 0)
-            text = "".join(seg.get("utf8", "") for seg in event["segs"]).strip()
-            if text and text != "\n":
-                segments.append({
-                    "start": round(start_ms / 1000, 2),
-                    "duration": round(duration_ms / 1000, 2),
-                    "text": text,
-                })
+            full_text = " ".join(s["text"] for s in segments)
 
-        full_text = " ".join(s["text"] for s in segments)
+            return {
+                "video_id": raw.get("id"),
+                "title": raw.get("title"),
+                "language": lang,
+                "type": source_type,
+                "segment_count": len(segments),
+                "full_text": full_text,
+                "segments": segments,
+            }
 
-        return {
-            "video_id": raw.get("id"),
-            "title": raw.get("title"),
-            "language": lang,
-            "type": source_type,
-            "segment_count": len(segments),
-            "full_text": full_text,
-            "segments": segments,
-        }
-
-except Exception as e:
+    except Exception as e:
+        # 6. Corrected Retry Logic
         if not use_cookies and is_auth_error(e) and COOKIES_FILE.exists():
-            print(f"[RETRY] Auth/Bot error detected for {url}. Retrying with cookies...")
-            return fetch_transcript(url, lang, use_cookies=True)
+            print(f"[RETRY] Auth/Bot error detected for transcript {url}. Retrying with cookies...")
+            return _fetch_transcript(url, lang, use_cookies=True)
         
         print(f"[ERROR] fetch_transcript failed: {str(e)}")
         raise e
+
       
 
 
