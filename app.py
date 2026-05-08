@@ -51,6 +51,7 @@ app = FastAPI(title="yt-dlp server", version="2.1.0")
 
 DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", "./downloads"))
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+COOKIES_FILE = Path(os.environ.get("COOKIES_FILE", "./cookies.txt"))
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -79,6 +80,11 @@ BASE_OPTS = {
     "js_runtimes": {"deno": {}},
 }
 
+def is_auth_error(exception: Exception) -> bool:
+    """Check if the error message indicates a need for cookies."""
+    err_msg = str(exception).lower()
+    return "sign in" in err_msg or "bot" in err_msg or "confirm your age" in err_msg
+  
 
 def classify_format(f: dict) -> dict | None:
     vcodec = f.get("vcodec", "none")
