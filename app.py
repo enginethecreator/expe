@@ -290,7 +290,7 @@ def _fetch_info(url: str) -> dict:
     }
 
 
-def _fetch_transcript(url: str, lang: str) -> dict:
+def _fetch_transcript(url: str, lang: str, use_cookies: bool = False) -> dict:
     opts = {
         **BASE_OPTS,
         "skip_download": True,
@@ -299,6 +299,10 @@ def _fetch_transcript(url: str, lang: str) -> dict:
         "subtitleslangs": [lang],
         "subtitlesformat": "json3",
     }
+
+    if use_cookies and COOKIES_FILE.exists():
+        opts["cookiefile"] = str(COOKIES_FILE)
+
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         raw = ydl.extract_info(url, download=False)
@@ -366,6 +370,15 @@ def _fetch_transcript(url: str, lang: str) -> dict:
             "full_text": full_text,
             "segments": segments,
         }
+
+except Exception as e:
+        if not use_cookies and is_auth_error(e) and COOKIES_FILE.exists():
+            print(f"[RETRY] Auth/Bot error detected for {url}. Retrying with cookies...")
+            return fetch_transcript(url, lang, use_cookies=True)
+        
+        print(f"[ERROR] fetch_transcript failed: {str(e)}")
+        raise e
+      
 
 
 def _run_download(url: str, format_id: str | None, quality: str, ext: str) -> dict:
