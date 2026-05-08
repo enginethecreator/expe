@@ -22,6 +22,8 @@ DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", "./downloads"))
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 print("FFMPEG PATH:", shutil.which("ffmpeg"))
 CLEANUP_AFTER_MINUTES = int(os.environ.get("CLEANUP_AFTER_MINUTES", 10))
+COOKIES_FILE = Path(os.environ.get("COOKIES_FILE", "./cookies.txt"))
+
 
 progress_store: Dict[str, dict] = {}
 
