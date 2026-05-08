@@ -1,289 +1,342 @@
-"""
-app.py — Advanced yt-dlp FastAPI server (v2.2.0 FIXED)
-
-Key Fixes:
-- Added js_runtimes + remote_components (EJS bypass)
-- Removed harmful player_client override
-- Fixed indentation + syntax errors
-- Removed invalid progress_store references in quick download
-- Ensured stable extraction on Railway/server IPs
-"""
+# app.py — yt-dlp FastAPI server (v5.0.0, >= 2026.03.17 compliant)
 
 import os
-import re
 import asyncio
-import json
-import urllib.request
+import threading
+import time
+import shutil
+import uuid
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Optional, List, Dict
 
 import yt_dlp
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.responses import StreamingResponse
-import tempfile
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel
-
 
 # ── Setup ─────────────────────────────────────────────
 
-app = FastAPI(title="yt-dlp server", version="2.2.0")
+app = FastAPI(title="yt-dlp server", version="5.0.0")
 
 DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", "./downloads"))
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+print("FFMPEG PATH:", shutil.which("ffmpeg"))
+CLEANUP_AFTER_MINUTES = int(os.environ.get("CLEANUP_AFTER_MINUTES", 10))
 
-executor = ThreadPoolExecutor(max_workers=4)
+progress_store: Dict[str, dict] = {}
 
-
-# ── Models ────────────────────────────────────────────
-
-class DownloadRequest(BaseModel):
-    url: str
-    format_id: Optional[str] = None
-    quality: Optional[str] = "best"
-    ext: Optional[str] = "mp4"
-
-
-class QuickDownloadRequest(BaseModel):
-    url: str
-
-
-# ── Base yt-dlp options (FIXED) ───────────────────────
+# Enable verbose via env
+VERBOSE = os.environ.get("YTDLP_VERBOSE", "0") == "1"
 
 BASE_OPTS = {
-    "quiet": True,
-    "no_warnings": True,
+    "quiet": not VERBOSE,
+    "no_warnings": not VERBOSE,
     "noplaylist": True,
     "socket_timeout": 30,
     "retries": 3,
     "fragment_retries": 3,
     "concurrent_fragment_downloads": 3,
-
-    # 🔑 Critical anti-bot fix
-    "js_runtimes": {"node": {}},
-    "remote_components": ["ejs:python"],
+    "nocheckcertificate": True,
 }
 
+# ── Models ────────────────────────────────────────────
 
-# ── Helpers ───────────────────────────────────────────
+class InfoRequest(BaseModel):
+    url: str
 
-def _human_bytes(b: int | None) -> str:
-    if not b:
-        return "unknown"
-    for unit in ["B", "KB", "MB", "GB"]:
-        if b < 1024:
-            return f"{b:.1f}{unit}"
-        b /= 1024
-    return f"{b:.1f}TB"
+class DownloadRequest(BaseModel):
+    url: str
+    format_id: Optional[str] = None
 
 
-def classify_format(f: dict) -> dict | None:
-    vcodec = f.get("vcodec", "none")
-    acodec = f.get("acodec", "none")
+# ── Format Normalizer (>= 2026.03.17 safe selectors) ──
 
-    has_video = vcodec not in (None, "none")
-    has_audio = acodec not in (None, "none")
+def normalize_selector(format_id: Optional[str]) -> str:
+    if format_id:
+        return f"{format_id}+bestaudio/{format_id}"
+    return "b"
 
-    if not has_video and not has_audio:
-        return None
 
-    kind = "video+audio" if has_video and has_audio else (
-        "video-only" if has_video else "audio-only"
-    )
+def simplify_formats(formats: List[dict]) -> dict:
+    """
+    Return only relevant formats:
+    - 1080p, 720p, 360p video
+    - best audio
+    """
+    video_targets = [1080, 720, 360]
 
-    filesize = f.get("filesize") or f.get("filesize_approx")
+    video_map = {h: None for h in video_targets}
+    best_audio = None
+
+    for f in formats:
+        if f.get("vcodec") != "none" and f.get("height") in video_targets:
+            h = f.get("height")
+            if not video_map[h]:
+                video_map[h] = {
+                    "format_id": f["format_id"],
+                    "ext": f["ext"],
+                    "height": h,
+                    "filesize": f.get("filesize") or f.get("filesize_approx"),
+                }
+
+        if f.get("acodec") != "none" and f.get("vcodec") == "none":
+            if not best_audio or (f.get("abr") or 0) > (best_audio.get("abr") or 0):
+                best_audio = {
+                    "format_id": f["format_id"],
+                    "ext": f["ext"],
+                    "abr": f.get("abr"),
+                    "filesize": f.get("filesize") or f.get("filesize_approx"),
+                }
 
     return {
-        "format_id": f.get("format_id"),
-        "ext": f.get("ext"),
-        "type": kind,
-        "resolution": f.get("resolution") or (
-            f"{f['height']}p" if f.get("height") else "audio only"
-        ),
-        "filesize": filesize,
-        "filesize_human": _human_bytes(filesize),
+        "video": [v for v in video_map.values() if v],
+        "audio": best_audio,
     }
 
 
-def _resolve_format_selector(format_id, quality, ext):
-    if format_id:
-        return f"{format_id}+bestaudio/{format_id}"
+# ── Core Logic ────────────────────────────────────────
 
-    q = (quality or "best").lower()
-    e = (ext or "mp4").lower()
-
-    if q == "audio":
-        return "bestaudio/best"
-
-    if q in ["1080p", "720p", "480p", "360p"]:
-        h = int(q.replace("p", ""))
-        return f"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
-
-    return "bestvideo+bestaudio/best"
-
-
-# ── Workers ───────────────────────────────────────────
-
-def _fetch_info(url: str):
+def fetch_info(url: str):
     opts = {**BASE_OPTS, "skip_download": True}
 
     with yt_dlp.YoutubeDL(opts) as ydl:
-        raw = ydl.extract_info(url, download=False)
-        raw = ydl.sanitize_info(raw)
+        info = ydl.extract_info(url, download=False)
 
-    formats = [f for f in (classify_format(x) for x in raw.get("formats", [])) if f]
+    formats = info.get("formats", [])
+    simplified = simplify_formats(formats)
 
-    return {
-        "id": raw.get("id"),
-        "title": raw.get("title"),
-        "duration": raw.get("duration"),
-        "formats": formats,
+    result = {
+        "title": info.get("title"),
+        "duration": info.get("duration"),
+        "formats": simplified,
     }
 
+    print("INFO RESULT:", result)  # tracing
 
-def _run_download(url, format_id, quality, ext):
-    selector = _resolve_format_selector(format_id, quality, ext)
+    return result
 
-    uid = os.urandom(4).hex()
-    output = str(DOWNLOADS_DIR / f"%(title)s [{uid}].%(ext)s")
 
-    final_path = {"value": None}
+def download_video(url: str, download_id: str, format_id: Optional[str]):
+    selector = normalize_selector(format_id)
+
+    output_template = str(DOWNLOADS_DIR / f"%(title)s-{download_id[:8]}.%(ext)s")
 
     def hook(d):
-        if d["status"] == "finished":
-            final_path["value"] = d.get("filename")
+        if d["status"] == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            downloaded = d.get("downloaded_bytes", 0)
+            percent = (downloaded / total * 100) if total else 0
 
-    opts = {
+            progress_store[download_id].update({
+                "status": "downloading",
+                "progress": round(percent, 2),
+                "text": f"{round(percent,2)}%",
+            })
+
+        elif d["status"] == "finished":
+            progress_store[download_id].update({
+                "status": "processing",
+                "progress": 95,
+                "text": "processing...",
+            })
+
+    ydl_opts = {
         **BASE_OPTS,
         "format": selector,
-        "outtmpl": output,
+        "outtmpl": output_template,
         "progress_hooks": [hook],
-        "merge_output_format": ext if ext in ("mp4", "mkv", "webm") else "mp4",
+        "merge_output_format": "mp4",
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filepath = ydl.prepare_filename(info)
 
-    if not final_path["value"]:
-        raise FileNotFoundError("Download failed")
+        file = Path(filepath)
 
-    file = Path(final_path["value"])
+        result = {
+            "title": info.get("title"),
+            "filename": file.name,
+            "filepath": str(file),
+        }
 
-    return {
-        "title": info.get("title"),
-        "file_path": str(file),
-        "filename": file.name,
-        "ext": file.suffix.lstrip("."),
-        "filesize": file.stat().st_size,
-        "filesize_human": _human_bytes(file.stat().st_size),
+        print("DOWNLOAD RESULT:", result)  # tracing
+
+        progress_store[download_id].update({
+            "status": "completed",
+            "progress": 100,
+            "text": "done",
+            **result
+        })
+
+        threading.Thread(target=cleanup_file, args=(file,), daemon=True).start()
+
+    except Exception as e:
+        progress_store[download_id].update({
+            "status": "error",
+            "error": str(e),
+        })
+
+
+def cleanup_file(file: Path):
+    time.sleep(CLEANUP_AFTER_MINUTES * 60)
+    try:
+        if file.exists():
+            file.unlink()
+    except:
+        pass
+
+
+# ── UI ────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Downloader</title>
+<style>
+body{font-family:sans-serif;background:#0f172a;color:#fff;text-align:center;padding-top:60px}
+input,select{width:400px;padding:10px;border-radius:8px;border:none;margin:5px}
+button{padding:12px 20px;border:none;background:#3b82f6;color:#fff;border-radius:8px}
+.bar{width:400px;height:8px;background:#333;margin:20px auto;border-radius:4px}
+.fill{height:100%;width:0;background:#22c55e}
+</style>
+</head>
+<body>
+
+<h2>yt-dlp advanced downloader</h2>
+
+<input id="url" placeholder="paste url"/><br>
+<button onclick="getInfo()">get formats</button><br>
+
+<select id="formats"></select><br>
+<button onclick="start()">download</button>
+
+<div class="bar"><div id="fill" class="fill"></div></div>
+<p id="text"></p>
+
+<script>
+let currentId=null;
+
+async function getInfo(){
+    const url=document.getElementById("url").value;
+
+    const res=await fetch("/info",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})});
+    const data=await res.json();
+
+    const select=document.getElementById("formats");
+    select.innerHTML="";
+
+    data.formats.video.forEach(f=>{
+        const opt=document.createElement("option");
+        opt.value=f.format_id;
+        opt.text=`${f.height}p (${(f.filesize||0)/1000000}MB)`;
+        select.appendChild(opt);
+    });
+
+    if(data.formats.audio){
+        const opt=document.createElement("option");
+        opt.value=data.formats.audio.format_id;
+        opt.text=`audio (${(data.formats.audio.filesize||0)/1000000}MB)`;
+        select.appendChild(opt);
+    }
+}
+
+async function start(){
+    const url=document.getElementById("url").value;
+    const format_id=document.getElementById("formats").value;
+
+    const res=await fetch("/download",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,format_id})});
+    const data=await res.json();
+
+    currentId=data.download_id;
+    poll();
+}
+
+async function poll(){
+    if(!currentId)return;
+
+    const res=await fetch("/progress/"+currentId);
+    const data=await res.json();
+
+    document.getElementById("fill").style.width=data.progress+"%";
+    document.getElementById("text").innerText=data.text||data.status;
+
+    if(data.status==="completed"){
+        window.location="/download/"+currentId;
+        return;
     }
 
-
-def _run_quick_download(url: str):
-    uid = os.urandom(4).hex()
-
-    output = str(DOWNLOADS_DIR / f"%(title)s [quick-{uid}].%(ext)s")
-
-    opts = {
-        **BASE_OPTS,
-        "format": "b",
-        "outtmpl": output,
+    if(data.status==="error"){
+        document.getElementById("text").innerText=data.error;
+        return;
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    setTimeout(poll,1000);
+}
+</script>
 
-    matches = [
-        f for f in DOWNLOADS_DIR.glob(f"*{uid}*")
-        if f.suffix not in (".part", ".ytdl", ".tmp")
-    ]
-
-    if not matches:
-        raise FileNotFoundError("Downloaded file not found")
-
-    file = matches[0]
-
-    return {
-        "filename": file.name,
-        "ext": file.suffix.lstrip("."),
-        "filesize_human": _human_bytes(file.stat().st_size),
-    }
+</body>
+</html>
+"""
 
 
-# ── Routes ────────────────────────────────────────────
+# ── API ───────────────────────────────────────────────
 
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
-
-@app.get("/info")
-async def info(url: str):
-    loop = asyncio.get_event_loop()
-    data = await loop.run_in_executor(executor, _fetch_info, url)
-    return {"success": True, "data": data}
+@app.post("/info")
+async def info(req: InfoRequest):
+    try:
+        data = await asyncio.to_thread(fetch_info, req.url)
+        return data
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.post("/download")
 async def download(req: DownloadRequest):
-    loop = asyncio.get_event_loop()
+    download_id = str(uuid.uuid4())
 
-    result = await loop.run_in_executor(
-        executor,
-        _run_download,
-        req.url,
-        req.format_id,
-        req.quality,
-        req.ext,
-    )
-
-    return {
-        "success": True,
-        "data": {
-            **result,
-            "fetch_url": f"/download/file?path={result['filename']}",
-        },
+    progress_store[download_id] = {
+        "status": "starting",
+        "progress": 0,
+        "text": "starting...",
     }
 
+    threading.Thread(
+        target=download_video,
+        args=(req.url, download_id, req.format_id),
+        daemon=True
+    ).start()
 
-@app.post("/quick")
-async def quick_download(req: QuickDownloadRequest):
-    def generate():
-        with tempfile.NamedTemporaryFile(delete=True) as tmp:
-            ydl_opts = {
-                **BASE_OPTS,
-                "format": "b",
-                "outtmpl": tmp.name,
-            }
+    return {"download_id": download_id}
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([req.url])
 
-            tmp.seek(0)
-            while chunk := tmp.read(8192):
-                yield chunk
+@app.get("/progress/{download_id}")
+async def progress(download_id: str):
+    data = progress_store.get(download_id)
+    if not data:
+        return {"status": "not_found"}
+    return data
 
-    return StreamingResponse(
-        generate(),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": "attachment; filename=video.mp4"
-        },
-    )
 
-@app.get("/download/file")
-async def serve(path: str):
-    file_path = DOWNLOADS_DIR / path
+@app.get("/download/{download_id}")
+async def serve(download_id: str):
+    data = progress_store.get(download_id)
 
-    if not file_path.exists():
-        raise HTTPException(404, "File not found")
+    if not data or data.get("status") != "completed":
+        raise HTTPException(404, "file not ready")
 
-    if not str(file_path.resolve()).startswith(str(DOWNLOADS_DIR.resolve())):
-        raise HTTPException(403, "Access denied")
+    path = Path(data["filepath"])
 
-    return FileResponse(
-        path=str(file_path),
-        filename=file_path.name,
-        media_type="application/octet-stream",
-    )
+    if not path.exists():
+        raise HTTPException(404, "file missing")
+
+    return FileResponse(path=str(path), filename=data["filename"])
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
