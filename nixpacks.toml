@@ -5,3 +5,18 @@
 
 [phases.setup]
 nixPkgs = ['ffmpeg', 'nodejs']
+
+[phases.install]
+cmds = [
+  "python -m pip install --upgrade pip",
+  "pip install -r requirements.txt"
+]
+
+[phases.build]
+cmds = [
+  "mkdir -p downloads"
+]
+
+[start]
+cmd = "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"
+
