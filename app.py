@@ -73,12 +73,24 @@ class QuickDownloadRequest(BaseModel):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 BASE_OPTS = {
-    "quiet": True,
+    "quiet": False,
+    "no_warnings": False,
     "noplaylist": True,
+    "socket_timeout": 30,
+    "retries": 3,
+    "fragment_retries": 3,
+    "concurrent_fragment_downloads": 3,
+    "nocheckcertificate": True,
     # Required since yt-dlp 2025.11.12: a JS runtime to solve YouTube's n-challenge.
     # node is available in the Railway environment via nixpacks.toml (nodejs_22).
     # Empty dict means "find node in PATH" — no hardcoded path needed.
     "js_runtimes": {"node": {}},
+    "extractor_args": {
+        "youtube": {
+          #  "player_client": ["android", "web"],
+            "remote_components": ["ejs:github"]
+        },
+    },
 }
 
 def is_auth_error(exception: Exception) -> bool:
