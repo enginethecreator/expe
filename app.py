@@ -81,7 +81,7 @@ BASE_OPTS = {
     "fragment_retries": 3,
     "concurrent_fragment_downloads": 3,
     "nocheckcertificate": True,
-    "js_runtimes": {'deno': {}},
+    "js_runtimes": {'node': {}},
    # "extractor_args": {
        # "youtube": {
           #  "player_client": ["android", "web"],
