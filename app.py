@@ -85,12 +85,12 @@ BASE_OPTS = {
         "deno": {},
         "node": {}
     },
-    "extractor_args": {
-        "youtube": {
+   # "extractor_args": {
+       # "youtube": {
           #  "player_client": ["android", "web"],
-            "remote_components": ["ejs:github"]
-        },
-    },
+         #   "remote_components": ["ejs:github"]
+      #  },
+  #  },
 }
 
 def is_auth_error(exception: Exception) -> bool:
