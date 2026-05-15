@@ -236,59 +236,91 @@ def _resolve_format_selector(
 
 # ── Sync worker functions ──────────────────────────────────────────────────────
 
-def _fetch_info(url: str) -> dict:
-    opts = {**BASE_OPTS, "skip_download": True}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        raw = ydl.extract_info(url, download=False)
-        raw = ydl.sanitize_info(raw)
-
-    formats = [classify_format(f) for f in raw.get("formats", [])]
-    formats = [f for f in formats if f is not None]
-
-    thumbnails = sorted(
-        raw.get("thumbnails") or [],
-        key=lambda t: (t.get("width") or 0) * (t.get("height") or 0),
-        reverse=True,
-    )
-
-    return {
-        "id": raw.get("id"),
-        "title": raw.get("title"),
-        "description": (raw.get("description") or "")[:500] or None,
-        "uploader": raw.get("uploader"),
-        "uploader_url": raw.get("uploader_url"),
-        "channel_id": raw.get("channel_id"),
-        "upload_date": raw.get("upload_date"),
-        "timestamp": raw.get("timestamp"),
-        "duration": raw.get("duration"),
-        "duration_string": raw.get("duration_string"),
-        "view_count": raw.get("view_count"),
-        "like_count": raw.get("like_count"),
-        "comment_count": raw.get("comment_count"),
-        "age_limit": raw.get("age_limit"),
-        "categories": raw.get("categories"),
-        "tags": (raw.get("tags") or [])[:20],
-        "is_live": raw.get("is_live"),
-        "was_live": raw.get("was_live"),
-        "chapters": raw.get("chapters"),
-        "thumbnail": raw.get("thumbnail"),
-        "thumbnails": thumbnails[:5],
-        "webpage_url": raw.get("webpage_url"),
-        "playability_status": raw.get("availability"),
-        "has_subtitles": bool(raw.get("subtitles")),
-        "has_auto_captions": bool(raw.get("automatic_captions")),
-        "subtitle_languages": list((raw.get("subtitles") or {}).keys()),
-        "auto_caption_languages": list(
-            (raw.get("automatic_captions") or {}).keys()
-        )[:10],
-        "format_count": len(formats),
-        "formats": formats,
-        "formats_grouped": {
-            "combined": [f for f in formats if f["type"] == "video+audio"],
-            "video_only": [f for f in formats if f["type"] == "video-only"],
-            "audio_only": [f for f in formats if f["type"] == "audio-only"],
-        },
+def _fetch_info(url: str, use_cookies: bool = False) -> dict:
+    opts = {
+        **BASE_OPTS,
+        "skip_download": True,
     }
+
+    # Apply cookies only during retry
+    if use_cookies and COOKIES_FILE.exists():
+        opts["cookiefile"] = str(COOKIES_FILE)
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            raw = ydl.extract_info(url, download=False)
+            raw = ydl.sanitize_info(raw)
+
+        formats = [classify_format(f) for f in raw.get("formats", [])]
+        formats = [f for f in formats if f is not None]
+
+        thumbnails = sorted(
+            raw.get("thumbnails") or [],
+            key=lambda t: (t.get("width") or 0) * (t.get("height") or 0),
+            reverse=True,
+        )
+
+        return {
+            "id": raw.get("id"),
+            "title": raw.get("title"),
+            "description": (raw.get("description") or "")[:500] or None,
+            "uploader": raw.get("uploader"),
+            "uploader_url": raw.get("uploader_url"),
+            "channel_id": raw.get("channel_id"),
+            "upload_date": raw.get("upload_date"),
+            "timestamp": raw.get("timestamp"),
+            "duration": raw.get("duration"),
+            "duration_string": raw.get("duration_string"),
+            "view_count": raw.get("view_count"),
+            "like_count": raw.get("like_count"),
+            "comment_count": raw.get("comment_count"),
+            "age_limit": raw.get("age_limit"),
+            "categories": raw.get("categories"),
+            "tags": (raw.get("tags") or [])[:20],
+            "is_live": raw.get("is_live"),
+            "was_live": raw.get("was_live"),
+            "chapters": raw.get("chapters"),
+            "thumbnail": raw.get("thumbnail"),
+            "thumbnails": thumbnails[:5],
+            "webpage_url": raw.get("webpage_url"),
+            "playability_status": raw.get("availability"),
+            "has_subtitles": bool(raw.get("subtitles")),
+            "has_auto_captions": bool(raw.get("automatic_captions")),
+            "subtitle_languages": list((raw.get("subtitles") or {}).keys()),
+            "auto_caption_languages": list(
+                (raw.get("automatic_captions") or {}).keys()
+            )[:10],
+            "format_count": len(formats),
+            "formats": formats,
+            "formats_grouped": {
+                "combined": [
+                    f for f in formats if f["type"] == "video+audio"
+                ],
+                "video_only": [
+                    f for f in formats if f["type"] == "video-only"
+                ],
+                "audio_only": [
+                    f for f in formats if f["type"] == "audio-only"
+                ],
+            },
+        }
+
+    except Exception as e:
+        # Retry once with cookies on auth/bot detection
+        if (
+            not use_cookies
+            and is_auth_error(e)
+            and COOKIES_FILE.exists()
+        ):
+            print(
+                f"[RETRY] Auth/Bot error detected for info {url}. "
+                f"Retrying with cookies..."
+            )
+
+            return _fetch_info(url, use_cookies=True)
+
+        print(f"[ERROR] fetch_info failed: {str(e)}")
+        raise e
 
 
 def _fetch_transcript(url: str, lang: str, use_cookies: bool = False) -> dict:
