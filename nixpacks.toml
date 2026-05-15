@@ -4,16 +4,11 @@
 # nodejs  — required by bgutil-ytdlp-pot-provider script mode to generate PO tokens
 
 [phases.setup]
-nixPkgs = ['ffmpeg', 'nodejs']
-
-[phases.install]
-cmds = [
-  "python -m pip install --upgrade pip",
-  "pip install -r requirements.txt"
-]
+nixPkgs = ['...', 'ffmpeg', 'deno', 'nodejs']
 
 [phases.build]
 cmds = [
+  "pip install -r requirements.txt",
   "mkdir -p downloads"
 ]
 
