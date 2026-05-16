@@ -2,7 +2,3 @@ fastapi
 uvicorn[standard]
 yt-dlp[default]
 pydantic
-brotli
-certifi
-curl-cffi
-mutagen
