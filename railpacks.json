@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "packages": {
+    "python": "3.11",
+    "node": "22",
+    "deno": "latest"
+  },
+  "deploy": {
+    "aptPackages": ["ffmpeg"],
+    "startCommand": "uvicorn app:app --host 0.0.0.0 --port $PORT"
+  }
+}
