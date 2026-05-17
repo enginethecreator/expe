@@ -37,6 +37,7 @@ import asyncio
 import shutil
 import json
 import urllib.request
+import functools
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -68,6 +69,8 @@ class DownloadRequest(BaseModel):
 
 class QuickDownloadRequest(BaseModel):
     url: str
+    format_id: str
+
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -637,13 +640,19 @@ async def download_video(req: DownloadRequest):
 
 @app.post("/quick")
 async def quick_download(req: QuickDownloadRequest):
-    """Body: { "url": "..." }"""
+    """Body: { "url": "...", "format_id": "..." }"""
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, _run_quick_download, req.url)
+        result = await loop.run_in_executor(
+            executor,
+            functools.partial(_run_quick_download, req.url, req.format_id)
+        )
         return {
             "success": True,
-            "data": {**result, "fetch_url": f"/download/file?path={result['filename']}"},
+            "data": {
+                **result,
+                "fetch_url": f"/download/file?path={result['filename']}",
+            },
         }
     except FileNotFoundError as e:
         raise HTTPException(500, str(e))
@@ -651,6 +660,7 @@ async def quick_download(req: QuickDownloadRequest):
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, str(e))
+
 
 
 @app.get("/download/file")
