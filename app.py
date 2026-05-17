@@ -495,14 +495,27 @@ def _run_download(url: str, format_id: str | None, quality: str, ext: str) -> di
     }
 
 
-def _run_quick_download(url: str) -> dict:
+def _run_quick_download(url: str, format_id: str) -> dict:
     uid = os.urandom(4).hex()
-    opts = {
-        "format": "bestvideo+bestaudio/best",
+
+    format_selector = (
+        f"{format_id}"
+        f"/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+        f"/bestvideo+bestaudio"
+        f"/best"
+    )
+
+    local_opts = {
+        "format": format_selector,
+        "merge_output_format": "mp4",
         "outtmpl": str(DOWNLOADS_DIR / f"%(title)s [{uid}].%(ext)s"),
     }
+
+    opts = {**BASE_OPTS, **local_opts}  # local_opts wins on any key conflict
+
     with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
+        info = ydl.extract_info(url, download=True)
+        used_format_id = info.get("format_id", "unknown")
 
     matches = [
         f for f in DOWNLOADS_DIR.glob(f"*{uid}*")
@@ -512,11 +525,15 @@ def _run_quick_download(url: str) -> dict:
         raise FileNotFoundError("Downloaded file not found on disk")
 
     file_path = matches[0]
+
     return {
         "filename": file_path.name,
         "ext": file_path.suffix.lstrip("."),
         "filesize_human": _human_bytes(file_path.stat().st_size),
+        "format_id_requested": format_id,
+        "format_id_used": used_format_id,
     }
+
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
