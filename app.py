@@ -51,6 +51,7 @@ COOKIES_FILE = Path(os.environ.get("COOKIES_FILE", "./cookies.txt"))
 
 executor = ThreadPoolExecutor(max_workers=4)
 
+
 # In-memory job store for album downloads
 # { job_id: { status, total, done, tracks: [...], error? } }
 jobs: dict[str, dict] = {}
