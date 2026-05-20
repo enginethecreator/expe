@@ -1,5 +1,5 @@
 """
-music_app.py — YouTube Music FastAPI server + embedded UI
+music_app.py — -YouTube Music FastAPI server + embedded UI
 ==========================================================
 
 Endpoints:
