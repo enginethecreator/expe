@@ -1,30 +1,3 @@
-"""
-music_app.py — -YouTube Music FastAPI server + embedded UI
-==========================================================
-
-Endpoints:
-  GET  /                          — serves the UI (single HTML page)
-  GET  /search?q=&limit=          — search YouTube Music, returns track list
-  GET  /info?url=                 — full metadata for a track or album/playlist
-  POST /download                  — download single track as m4a/mp3
-  POST /download/album            — download all tracks in an album/playlist
-  GET  /file?path=                — serve a downloaded file
-  GET  /jobs/{job_id}             — poll album download job progress
-
-URL patterns yt-dlp handles for YouTube Music:
-  Single track : https://music.youtube.com/watch?v=VIDEO_ID
-  Album        : https://music.youtube.com/playlist?list=PLAYLIST_ID
-  Search       : https://music.youtube.com/search?q=QUERY   (flat-playlist extract)
-
-Audio format strategy:
-  bestaudio[ext=m4a]/bestaudio  → FFmpegExtractAudio → m4a or mp3
-  m4a is preferred: it preserves AAC without re-encoding, keeps quality intact.
-  mp3 always re-encodes — useful for compatibility but lossy.
-
-Metadata embedding:
-  EmbedThumbnail + FFmpegMetadata postprocessors write album art, title,
-  artist, album, track number into the output file via mutagen/ffmpeg.
-"""
 
 import os
 import re
@@ -128,10 +101,7 @@ def _audio_opts(fmt: str, output_template: str) -> dict:
 # ── Worker functions ───────────────────────────────────────────────────────────
 
 def _search(query: str, limit: int = 10) -> list[dict]:
-    """
-    Search YouTube Music using the music.youtube.com/search extractor.
-    Returns flat list of track dicts with id, title, uploader, duration, thumbnail.
-    """
+ 
     search_url = f"https://music.youtube.com/search?q={query}"
 
     opts = {
@@ -166,11 +136,7 @@ def _search(query: str, limit: int = 10) -> list[dict]:
     return results
 
 
-def _fetch_info(url: str) -> dict:
-    """
-    Fetch metadata for a single track or an album/playlist.
-    Detects type from URL pattern.
-    """
+def _fetch_info(url: str) -> 
     is_playlist = "playlist?list=" in url or ("list=" in url and "watch" not in url)
 
     opts = {
@@ -270,10 +236,7 @@ def _download_track(url: str, fmt: str) -> dict:
 
 
 def _download_album_worker(job_id: str, url: str, fmt: str):
-    """
-    Background thread: fetches album info then downloads each track.
-    Updates jobs[job_id] incrementally so the polling endpoint sees progress.
-    """
+   
     try:
         # Step 1 — fetch track list
         jobs[job_id]["status"] = "fetching"
