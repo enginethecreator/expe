@@ -1,31 +1,3 @@
-"""
-music_app.py — YouTube Music FastAPI server + embedded UI
-==========================================================
-
-Endpoints:
-  GET  /                          — serves the UI (single HTML page)
-  GET  /search?q=&limit=          — search YouTube Music, returns track list
-  GET  /info?url=                 — full metadata for a track or album/playlist
-  POST /download                  — download single track as m4a/mp3
-  POST /download/album            — download all tracks in an album/playlist
-  GET  /file?path=                — serve a downloaded file
-  GET  /jobs/{job_id}             — poll album download job progress
-
-URL patterns yt-dlp handles for YouTube Music:
-  Single track : https://music.youtube.com/watch?v=VIDEO_ID
-  Album        : https://music.youtube.com/playlist?list=PLAYLIST_ID
-  Search       : https://music.youtube.com/search?q=QUERY   (flat-playlist extract)
-
-Audio format strategy:
-  bestaudio[ext=m4a]/bestaudio  → FFmpegExtractAudio → m4a or mp3
-  m4a is preferred: it preserves AAC without re-encoding, keeps quality intact.
-  mp3 always re-encodes — useful for compatibility but lossy.
-
-Metadata embedding:
-  EmbedThumbnail + FFmpegMetadata postprocessors write album art, title,
-  artist, album, track number into the output file via mutagen/ffmpeg.
-"""
-
 import os
 import re
 import uuid
